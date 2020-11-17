@@ -42,3 +42,18 @@ There are two different issues.
 Firstly WASM does not support [__asm__ __volatile__](https://github.com/emscripten-core/emscripten/issues/6339)
 
 Secondly WASM does not support [__uint128](https://github.com/emscripten-core/emscripten/issues/5630)
+
+# Fixing issues
+
+The solution to getting this working quick and greasy is to simply use some macros.
+
+```C
+#ifdef __Emscripten
+```
+
+Going further. When trying to get WASM working for the multicore backend. We need to add the following include.
+
+ ```C
+ 212 #include <sys/resource.h>
+ ```
+
