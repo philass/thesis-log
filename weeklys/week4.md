@@ -83,9 +83,6 @@ Got error:
 │ runs     │ 2552   │ 8      │ 0/2560    │
 └──────────┴────────┴────────┴───────────┘
 ```
-![futhark test results](resources/futests.png)
-
-
 
 # Issues
 
