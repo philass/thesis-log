@@ -1,3 +1,5 @@
+import Data.List 
+
 type EntryPointName = String
 type EntryPointType = String
 data JSEntryPoint = JSEntryPoint { name :: String,
@@ -5,7 +7,7 @@ data JSEntryPoint = JSEntryPoint { name :: String,
                                    ret :: [EntryPointType]
                                  }
 main = do
-  let jse = JSEntryPoint { name = "main", parameters = ["[]i32", "f64", "f32"], ret = ["i32", "i64"] }
+  let jse = JSEntryPoint { name = "main", parameters = ["[]i32", "f32"], ret = ["[]i32", "i64"] }
   putStr (javascriptWrapper [jse])
 
 
@@ -76,27 +78,29 @@ jsWrapEntryPoint :: JSEntryPoint -> String
 jsWrapEntryPoint jse =
   unlines
   ["  " ++ func_name ++ "(" ++ args1 ++ ") {",
-  -- cwrapEntryPoint func_name,
-  initArgs,
   inits,
-  "    futhark_entry_" ++ func_name ++ "(this.ctx, " ++ rets ++ ", " ++ args2 ++ ");",
+  initPtrs,
+  "    futhark_entry_" ++ func_name ++ "(this.ctx, " ++ rets ++ ", " ++ args1 ++ ");",
   results,  
   "    futhark_context_sync(this.ctx);",
   "    return [" ++ res ++ "];",
-  "}"]
+  "  }"]
   where
     func_name = name jse
+    alr = [0..(length (ret jse)) - 1]
+    alp = [0..(length (parameters jse)) - 1]
     convTypes = map typeConversion $ ret jse
-    initArgs = unlines $ map (\i -> initArg i ((parameters jse) !! i)) [0..(length (ret jse)) - 1]
-    inits = unlines $ map (\i -> initDataHeap i (convTypes !! i)) [0..(length (ret jse)) - 1]
-    results = unlines $ map (\i -> resDataHeap i (convTypes !! i)) [0..(length (ret jse)) - 1]
-    rets = tail (unwords [",dataHeap" ++ show i ++ ".byteOffset" | i <- [0..((length (ret jse)) - 1)]])
-    args1 = tail (unwords [",in" ++ show i | i <- [0..(length (parameters jse)-1)]])
-    args2 = tail (unwords ["," ++ (if (((parameters jse) !! i) !! 0) == '[' then "arr" else "in") ++ show i | i <- [0..(length (parameters jse)-1)]])
-    res = tail (unwords [",res" ++ show i ++ "[0]" | i <- [0..((length (ret jse)) - 1)]])
+    inits = unlines $ map (\i -> initDataHeap i (convTypes !! i)) alr
+    initPtrs = unlines $ map (\i -> initPtr i (ret jse !! i)) alr
+    results = unlines $ map (\i -> if (ret jse !! i) !! 0 == '[' then "" else resDataHeap i (convTypes !! i)) alr
+    rets = intercalate ", " [retPtrOrOther i jse "dataHeap" ".byteOffset" ptrRes | i <- alr]
+    args1 = intercalate ", " ["in" ++ show i | i <- alp]
+    res = intercalate ", " [retPtrOrOther i jse "res" "[0]" ptrRes | i <- alr]
+    ptrRes i _ = "res" ++ show i
+    retPtrOrOther i jse pre post f = if ((ret jse) !! i) !! 0 == '[' 
+                                  then f i $ (ret jse) !! i
+                                  else pre ++ show i ++ post
 
- 
-    
 cwrapEntryPoint :: JSEntryPoint -> String
 cwrapEntryPoint jse = 
   unlines 
@@ -109,16 +113,16 @@ cwrapEntryPoint jse =
     args = "['number'" ++ (concat (replicate  arg_length ", 'number'")) ++ "]"
 
 
-
-
-initArg :: Int -> EntryPointType -> String
-initArg arg_num ep =
+initPtr :: Int -> EntryPointType -> String
+initPtr argNum ep =
   let (i, jstype) = retType ep
-  in if i == 0 then ""
-            else unlines ["    var inHeap" ++ show arg_num ++ " = initData(in" ++ show arg_num ++ ");",
-                            "    var arr" ++ show arg_num ++ " = futhark_" ++ baseType ep ++ "_" ++ show i ++ "d(this.ctx, inHeap" ++ show arg_num ++ ".byteOffset, in" ++ show arg_num ++ ".length);"]
+  in 
+    if i == 0 
+    then "" else 
+    makePtr argNum
 
-
+makePtr :: Int -> String 
+makePtr i = "    var res" ++ show i ++ " = Module._malloc(8);"
 
 retType :: String -> (Integer, String)
 retType ('[':']':end) = 
@@ -126,7 +130,6 @@ retType ('[':']':end) =
   in (val + 1, typ)
 retType typ = (0, typeConversion typ)
 
--- TODO get base type in initArgs
 baseType :: String -> String
 baseType ('[':']':end) = baseType end
 baseType typ = typ
@@ -145,3 +148,59 @@ typeConversion typ =
     "f32" -> "Float32Array"
     "f64" -> "Float64Array"
     _ -> typ
+
+
+toFutharkArray :: String -> String
+toFutharkArray str =
+  unlines
+  ["function to_futhark_ " ++ ftype ++ "_" ++ show i ++  "d_arr(" ++ intercalate ", " args1 ++ ") {",
+   "  // Possibly do sanity check that dimensions dim0 * dimn == arr.length",
+   "  dataHeap = initData(arr);",
+   "  fut_arr = futhark_" ++ ftype ++ "_" + show i ++ "d(" ++ intercalate ", " args2 ++ ")",
+   "  return fut_arr;",
+   "}"]
+  where
+  ctx = "this.ctx"
+  arr = "arr"
+  ofs = "dataHeap.byteOffset"
+  dims = map (\i -> "dim" ++ show i) [0..i-1]
+  args1 = [ctx, arr] ++ dims
+  args2 = [ctx, ofs] ++ dims
+  (i, typ) = retType str
+  ftype = baseType str
+
+fromFutharkArrayShape :: String -> String
+  ["function from_futhark_shape_" ++ftype ++ "_" ++ show i ++  "_d_arr(" ++ intercalate ", " args1 ++ ") {",
+   "  ptr = futhark_shape_" ++ ftype ++ "_" ++ show i ++ "d(" ++ intercalate ", " args1 ++  ");"
+   "  dataHeap = initData(arr);",
+   "  fut_arr = futhark_" ++ ftype ++ "_" + show i ++ "_d(" ++ intercalate ", " args2 ++ ")",
+   "  return fut_arr;",
+   "}"]
+  where
+  ctx = "this.ctx"
+  arr = "arr"
+  dims = map (\i -> "dim" ++ show i) [0..i-1]
+  args1 = [ctx, arr]
+  (i, typ) = retType str
+  ftype = baseType str
+
+fromFutharkArrayValues :: String -> String
+fromFutharkArrayValues str = 
+  unlines
+  ["function from_futhark_values_" ++ftype ++ "_" ++ show i ++  "d_arr(" ++ intercalate ", " args1 ++ ") {",
+   "  // Possibly do sanity check that dimensions dim0 * dimn == arr.length",
+   "  dataHeap = initData(arr);",
+   "  fut_arr = futhark_" ++ ftype ++ "_" + show i ++ "d(" ++ intercalate ", " args2 ++ ")",
+   "  return fut_arr;",
+   "}"]
+  where
+  ctx = "this.ctx"
+  arr = "arr"
+  ofs = "dataHeap.byteOffset"
+  dims = map (\i -> "dim" ++ show i) [0..i-1]
+  args1 = [ctx, arr] ++ dims
+  args2 = [ctx, ofs] ++ dims
+  (i, typ) = retType str
+  ftype = baseType str
+
+
