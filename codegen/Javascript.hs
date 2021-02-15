@@ -7,7 +7,7 @@ data JSEntryPoint = JSEntryPoint { name :: String,
                                    ret :: [EntryPointType]
                                  }
 main = do
-  let jse = JSEntryPoint { name = "main", parameters = ["[]i32", "f32"], ret = ["[]i32", "i64"] }
+  let jse = JSEntryPoint { name = "main", parameters = ["[]i64"], ret = ["i64"] }
   putStr (javascriptWrapper [jse])
 
 
@@ -35,30 +35,65 @@ resDataHeap idx arrType =
 javascriptWrapper :: [JSEntryPoint] -> String
 javascriptWrapper entryPoints = unlines 
   [cwraps,
+   cwrapsJSE entryPoints,
   unlines $ map (cwrapEntryPoint) entryPoints,
   initFunc,
   classDef,
   constructor,
+  unlines $ concatMap (\jse -> map toFutharkArray (parameters jse)) entryPoints,
   (unlines $ map jsWrapEntryPoint entryPoints),
   endClassDef]
 
   
+--cwraps :: String
+--cwraps = 
+--  unlines
+--  ["futhark_context_config_new = Module.cwrap(",
+--   "  'futhark_context_config_new', 'number', []",
+--   ");",
+--   "",
+--   "futhark_context_new = Module.cwrap(",
+--   "  'futhark_context_new', 'number', ['number']",
+--   ");",
+--   "",
+--   "futhark_context_sync = Module.cwrap(",
+--   "  'futhark_context_sync', 'number', ['number']",
+--   ");"
+--   ]
+
+
 cwraps :: String
-cwraps = 
+cwraps =
   unlines
-  ["futhark_context_config_new = Module.cwrap(",
-   "  'futhark_context_config_new', 'number', []",
-   ");",
-   "",
-   "futhark_context_new = Module.cwrap(",
-   "  'futhark_context_new', 'number', ['number']",
-   ");",
-   "",
-   "futhark_context_sync = Module.cwrap(",
-   "  'futhark_context_sync', 'number', ['number']",
-   ");"]
+  [ cwrapFun "futhark_context_config_new" 0,
+    cwrapFun "futhark_context_new" 1,
+    cwrapFun "futhark_context_sync" 1
+  ]
+
+-- TODO Only wrap functions for first params
+cwrapsJSE :: [JSEntryPoint] -> String
+cwrapsJSE jses =
+    unlines $ 
+    map (\arg -> cwrapFun (gfn "new" arg) ((dim arg) + 2)) jses' ++
+    map (\arg -> cwrapFun (gfn "values" arg) ((dim arg) + 2)) jses' ++
+    map (\arg -> cwrapFun (gfn "shape" arg) 2) jses'
+  where
+    jses' = filter (\t -> dim t >  0) $ nub $ concatMap (\jse -> (parameters jse) ++ (ret jse)) jses
+    gfn typ str = "futhark_" ++ typ ++ "_" ++ baseType str ++ "_" ++ show (dim str) ++ "d"
+  
+  
+
+cwrapFun :: String -> Int -> String
+cwrapFun fname numArgs =
+  unlines
+  [
+  fname ++ " = Module.cwrap(",
+  "  '" ++ fname ++ "', 'number', [" ++ intercalate ", " (replicate numArgs "'number'") ++ "]",
+  ");"
+  ]
 
 
+  
 classDef :: String
 classDef = "class FutharkContext {"
 
@@ -134,6 +169,11 @@ baseType :: String -> String
 baseType ('[':']':end) = baseType end
 baseType typ = typ
 
+dim :: String -> Int
+dim ('[':']':end) = (dim end) + 1
+dim typ = 0
+
+
 typeConversion :: String -> String
 typeConversion typ =
   case typ of 
@@ -152,45 +192,58 @@ typeConversion typ =
 
 toFutharkArray :: String -> String
 toFutharkArray str =
+  if dim str == 0
+  then ""
+  else
   unlines
-  ["function to_futhark_ " ++ ftype ++ "_" ++ show i ++  "d_arr(" ++ intercalate ", " args1 ++ ") {",
-   "  // Possibly do sanity check that dimensions dim0 * dimn == arr.length",
-   "  dataHeap = initData(arr);",
-   "  fut_arr = futhark_" ++ ftype ++ "_" + show i ++ "d(" ++ intercalate ", " args2 ++ ")",
+  ["to_futhark_" ++ ftype ++ "_" ++ show i ++  "d_arr(" ++ intercalate ", " args1 ++ ") {",
+   -- "  // Possibly do sanity check that dimensions dim0 * dimn == arr.length",
+   "  var dataHeap = initData(arr);",
+   "  var fut_arr = futhark_new_" ++ ftype ++ "_" ++ show i ++ "d(" ++ intercalate ", " args2 ++ ");",
    "  return fut_arr;",
    "}"]
   where
   ctx = "this.ctx"
   arr = "arr"
   ofs = "dataHeap.byteOffset"
+  i = dim str
   dims = map (\i -> "dim" ++ show i) [0..i-1]
-  args1 = [ctx, arr] ++ dims
+  args1 = [arr] ++ dims
   args2 = [ctx, ofs] ++ dims
-  (i, typ) = retType str
   ftype = baseType str
 
 fromFutharkArrayShape :: String -> String
-  ["function from_futhark_shape_" ++ftype ++ "_" ++ show i ++  "_d_arr(" ++ intercalate ", " args1 ++ ") {",
-   "  ptr = futhark_shape_" ++ ftype ++ "_" ++ show i ++ "d(" ++ intercalate ", " args1 ++  ");"
+fromFutharkArrayShape str =
+  if dim str == 0
+  then ""
+  else
+  unlines
+  ["from_futhark_shape_" ++ftype ++ "_" ++ show i ++  "_d_arr(" ++ intercalate ", " args1 ++ ") {",
+   "  ptr = futhark_shape_" ++ ftype ++ "_" ++ show i ++ "d(" ++ intercalate ", " args1 ++  ");",
+   "  var nDataBytes = " ++ show i ++ " * 8;",
+   "  var dataHeap = new Uint8Array(Module.HEAPU8.buffer, dataPtr, nDataBytes);",
    "  dataHeap = initData(arr);",
-   "  fut_arr = futhark_" ++ ftype ++ "_" + show i ++ "_d(" ++ intercalate ", " args2 ++ ")",
+   "  fut_arr = futhark_" ++ ftype ++ "_" ++ show i ++ "_d(" ++ intercalate ", " args1 ++ ")",
    "  return fut_arr;",
    "}"]
   where
-  ctx = "this.ctx"
-  arr = "arr"
-  dims = map (\i -> "dim" ++ show i) [0..i-1]
-  args1 = [ctx, arr]
-  (i, typ) = retType str
-  ftype = baseType str
+    ctx = "this.ctx"
+    arr = "arr"
+    dims = map (\i -> "dim" ++ show i) [0..i-1]
+    args1 = [ctx, arr]
+    i = dim str
+    ftype = baseType str
 
 fromFutharkArrayValues :: String -> String
 fromFutharkArrayValues str = 
+  if dim str == 0
+  then ""
+  else
   unlines
-  ["function from_futhark_values_" ++ftype ++ "_" ++ show i ++  "d_arr(" ++ intercalate ", " args1 ++ ") {",
-   "  // Possibly do sanity check that dimensions dim0 * dimn == arr.length",
+  ["from_futhark_values_" ++ftype ++ "_" ++ show i ++  "d_arr(" ++ intercalate ", " args1 ++ ") {",
+   -- Possibly do sanity check that dimensions dim0 * dimn == arr.length",
    "  dataHeap = initData(arr);",
-   "  fut_arr = futhark_" ++ ftype ++ "_" + show i ++ "d(" ++ intercalate ", " args2 ++ ")",
+   "  fut_arr = futhark_" ++ ftype ++ "_" ++ show i ++ "d(" ++ intercalate ", " args2 ++ ")",
    "  return fut_arr;",
    "}"]
   where
@@ -200,7 +253,5 @@ fromFutharkArrayValues str =
   dims = map (\i -> "dim" ++ show i) [0..i-1]
   args1 = [ctx, arr] ++ dims
   args2 = [ctx, ofs] ++ dims
-  (i, typ) = retType str
+  i = dim str
   ftype = baseType str
-
-
