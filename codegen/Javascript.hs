@@ -7,7 +7,7 @@ data JSEntryPoint = JSEntryPoint { name :: String,
                                    ret :: [EntryPointType]
                                  }
 main = do
-  let jse = JSEntryPoint { name = "main", parameters = ["[]i64"], ret = ["i64"] }
+  let jse = JSEntryPoint { name = "main", parameters = ["[]i64"], ret = ["[]i64"] }
   putStr (javascriptWrapper [jse])
 
 
@@ -26,6 +26,9 @@ initFunc =
 initDataHeap :: Int -> String -> String
 initDataHeap idx arrType = "    var dataHeap" ++ show idx ++ " = initData(new " ++ arrType ++ "(1));"
 
+dataHeapConv :: String -> String -> String
+dataHeapConv size arrType = 
+  "    var dataHeapRes = new " ++ arrType ++ "(dataHeap.buffer, dataHeap.byteOffset, " ++ size ++ ");"
 
 resDataHeap :: Int -> String -> String
 resDataHeap idx arrType = 
@@ -41,27 +44,12 @@ javascriptWrapper entryPoints = unlines
   classDef,
   constructor,
   unlines $ concatMap (\jse -> map toFutharkArray (parameters jse)) entryPoints,
+  unlines $ concatMap (\jse -> map fromFutharkArrayShape (ret jse)) entryPoints,
+  unlines $ concatMap (\jse -> map fromFutharkArrayValues(ret jse)) entryPoints,
   (unlines $ map jsWrapEntryPoint entryPoints),
   endClassDef]
 
   
---cwraps :: String
---cwraps = 
---  unlines
---  ["futhark_context_config_new = Module.cwrap(",
---   "  'futhark_context_config_new', 'number', []",
---   ");",
---   "",
---   "futhark_context_new = Module.cwrap(",
---   "  'futhark_context_new', 'number', ['number']",
---   ");",
---   "",
---   "futhark_context_sync = Module.cwrap(",
---   "  'futhark_context_sync', 'number', ['number']",
---   ");"
---   ]
-
-
 cwraps :: String
 cwraps =
   unlines
@@ -75,8 +63,8 @@ cwrapsJSE :: [JSEntryPoint] -> String
 cwrapsJSE jses =
     unlines $ 
     map (\arg -> cwrapFun (gfn "new" arg) ((dim arg) + 2)) jses' ++
-    map (\arg -> cwrapFun (gfn "values" arg) ((dim arg) + 2)) jses' ++
-    map (\arg -> cwrapFun (gfn "shape" arg) 2) jses'
+    map (\arg -> cwrapFun (gfn "shape" arg) ((dim arg) + 2)) jses' ++
+    map (\arg -> cwrapFun (gfn "values" arg) 2) jses'
   where
     jses' = filter (\t -> dim t >  0) $ nub $ concatMap (\jse -> (parameters jse) ++ (ret jse)) jses
     gfn typ str = "futhark_" ++ typ ++ "_" ++ baseType str ++ "_" ++ show (dim str) ++ "d"
@@ -113,7 +101,7 @@ jsWrapEntryPoint :: JSEntryPoint -> String
 jsWrapEntryPoint jse =
   unlines
   ["  " ++ func_name ++ "(" ++ args1 ++ ") {",
-  inits,
+  --inits,
   initPtrs,
   "    futhark_entry_" ++ func_name ++ "(this.ctx, " ++ rets ++ ", " ++ args1 ++ ");",
   results,  
@@ -125,7 +113,7 @@ jsWrapEntryPoint jse =
     alr = [0..(length (ret jse)) - 1]
     alp = [0..(length (parameters jse)) - 1]
     convTypes = map typeConversion $ ret jse
-    inits = unlines $ map (\i -> initDataHeap i (convTypes !! i)) alr
+    --inits = unlines $ map (\i -> initDataHeap i (convTypes !! i)) alr
     initPtrs = unlines $ map (\i -> initPtr i (ret jse !! i)) alr
     results = unlines $ map (\i -> if (ret jse !! i) !! 0 == '[' then "" else resDataHeap i (convTypes !! i)) alr
     rets = intercalate ", " [retPtrOrOther i jse "dataHeap" ".byteOffset" ptrRes | i <- alr]
@@ -173,6 +161,7 @@ dim :: String -> Int
 dim ('[':']':end) = (dim end) + 1
 dim typ = 0
 
+jsType = (snd . retType)
 
 typeConversion :: String -> String
 typeConversion typ =
@@ -218,17 +207,17 @@ fromFutharkArrayShape str =
   then ""
   else
   unlines
-  ["from_futhark_shape_" ++ftype ++ "_" ++ show i ++  "_d_arr(" ++ intercalate ", " args1 ++ ") {",
-   "  ptr = futhark_shape_" ++ ftype ++ "_" ++ show i ++ "d(" ++ intercalate ", " args1 ++  ");",
-   "  var nDataBytes = " ++ show i ++ " * 8;",
-   "  var dataHeap = new Uint8Array(Module.HEAPU8.buffer, dataPtr, nDataBytes);",
-   "  dataHeap = initData(arr);",
-   "  fut_arr = futhark_" ++ ftype ++ "_" ++ show i ++ "_d(" ++ intercalate ", " args1 ++ ")",
-   "  return fut_arr;",
+  ["from_futhark_shape_" ++ftype ++ "_" ++ show i ++  "d_arr(futhark_arr) {",
+   "  var ptr = futhark_shape_" ++ ftype ++ "_" ++ show i ++ "d(" ++ intercalate ", " args1 ++  ");",
+   --"  var res = Module.getValue(ptr, 'i32');",
+   "  var dataHeap = new Uint8Array(Module.HEAPU8.buffer, ptr, 8 * "++ show i ++ ");",
+   " console.log(dataHeap);",
+   " var result = new BigInt64Array(dataHeap.buffer, dataHeap.byteOffset, " ++ show i ++ ");",
+   " return result.map((x) => x / 8n);",
    "}"]
   where
     ctx = "this.ctx"
-    arr = "arr"
+    arr = "futhark_arr"
     dims = map (\i -> "dim" ++ show i) [0..i-1]
     args1 = [ctx, arr]
     i = dim str
@@ -242,16 +231,22 @@ fromFutharkArrayValues str =
   unlines
   ["from_futhark_values_" ++ftype ++ "_" ++ show i ++  "d_arr(" ++ intercalate ", " args1 ++ ") {",
    -- Possibly do sanity check that dimensions dim0 * dimn == arr.length",
-   "  dataHeap = initData(arr);",
-   "  fut_arr = futhark_" ++ ftype ++ "_" ++ show i ++ "d(" ++ intercalate ", " args2 ++ ")",
-   "  return fut_arr;",
+   "  var dims = this.from_futhark_shape_" ++ ftype ++ "_" ++ show i ++ "d_arr(fut_arr);",
+   "  var length = Number(dims.reduce((a, b) => a * b));",
+   "  var dataHeap = initData(new " ++ arrType ++ "(length));",
+   "  futhark_values_" ++ ftype ++ "_" ++ show i ++ "d(" ++ intercalate ", " args2 ++ ");",
+   "console.log(dataHeap);",
+   dataHeapConv "length" arrType,
+   "  return dataHeapRes;",
    "}"]
   where
   ctx = "this.ctx"
-  arr = "arr"
+  fut_arr = "fut_arr"
+  ptr = "ptr"
   ofs = "dataHeap.byteOffset"
   dims = map (\i -> "dim" ++ show i) [0..i-1]
-  args1 = [ctx, arr] ++ dims
-  args2 = [ctx, ofs] ++ dims
+  args1 = [fut_arr]
+  args2 = [ctx, fut_arr, ofs]
   i = dim str
   ftype = baseType str
+  arrType = jsType str
