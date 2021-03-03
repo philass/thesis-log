@@ -45,6 +45,7 @@ javascriptWrapper entryPoints = unlines
   constructor,
   unlines $ concatMap (\jse -> map toFutharkArray (parameters jse)) entryPoints,
   unlines $ concatMap (\jse -> map fromFutharkArrayShape (ret jse)) entryPoints,
+  --unlines $ concatMap (\jse -> map fromFutharkArrayRawValues (ret jse)) entryPoints,
   unlines $ concatMap (\jse -> map fromFutharkArrayValues(ret jse)) entryPoints,
   (unlines $ map jsWrapEntryPoint entryPoints),
   endClassDef]
@@ -64,6 +65,7 @@ cwrapsJSE jses =
     unlines $ 
     map (\arg -> cwrapFun (gfn "new" arg) ((dim arg) + 2)) jses' ++
     map (\arg -> cwrapFun (gfn "shape" arg) ((dim arg) + 2)) jses' ++
+    map (\arg -> cwrapFun (gfn "values_raw" arg) ((dim arg) + 2)) jses' ++
     map (\arg -> cwrapFun (gfn "values" arg) 2) jses'
   where
     jses' = filter (\t -> dim t >  0) $ nub $ concatMap (\jse -> (parameters jse) ++ (ret jse)) jses
@@ -118,13 +120,13 @@ jsWrapEntryPoint jse =
     results = unlines $ map (\i -> if (ret jse !! i) !! 0 == '[' then "" else resDataHeap i (convTypes !! i)) alr
     rets = intercalate ", " [retPtrOrOther i jse "dataHeap" ".byteOffset" ptrRes | i <- alr]
     args1 = intercalate ", " ["in" ++ show i | i <- alp]
-    res = intercalate ", " [retPtrOrOther i jse "res" "[0]" ptrRes | i <- alr]
+    res = intercalate ", " [retPtrOrOther i jse "res" "[0]" ptrResValue | i <- alr]
     ptrRes i _ = "res" ++ show i
+    ptrResValue i _ = "getValue(res" ++ show i ++ ", 'i32')"
     retPtrOrOther i jse pre post f = if ((ret jse) !! i) !! 0 == '[' 
                                   then f i $ (ret jse) !! i
                                   else pre ++ show i ++ post
 
-cwrapEntryPoint :: JSEntryPoint -> String
 cwrapEntryPoint jse = 
   unlines 
   ["    futhark_entry_" ++ ename ++ " = Module.cwrap(", 
@@ -209,11 +211,9 @@ fromFutharkArrayShape str =
   unlines
   ["from_futhark_shape_" ++ftype ++ "_" ++ show i ++  "d_arr(futhark_arr) {",
    "  var ptr = futhark_shape_" ++ ftype ++ "_" ++ show i ++ "d(" ++ intercalate ", " args1 ++  ");",
-   --"  var res = Module.getValue(ptr, 'i32');",
    "  var dataHeap = new Uint8Array(Module.HEAPU8.buffer, ptr, 8 * "++ show i ++ ");",
-   " console.log(dataHeap);",
    " var result = new BigInt64Array(dataHeap.buffer, dataHeap.byteOffset, " ++ show i ++ ");",
-   " return result.map((x) => x / 8n);",
+   " return result;",
    "}"]
   where
     ctx = "this.ctx"
@@ -235,7 +235,6 @@ fromFutharkArrayValues str =
    "  var length = Number(dims.reduce((a, b) => a * b));",
    "  var dataHeap = initData(new " ++ arrType ++ "(length));",
    "  futhark_values_" ++ ftype ++ "_" ++ show i ++ "d(" ++ intercalate ", " args2 ++ ");",
-   "console.log(dataHeap);",
    dataHeapConv "length" arrType,
    "  return dataHeapRes;",
    "}"]
