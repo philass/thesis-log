@@ -1,0 +1,33 @@
+Change CLI/test.hs so that options came before binpath so we could pass options to the node runner
+
+Program executes like so after changes
+```
+futhark test --backend=wasm-multicore test.fut --runner="node"  --pass-option="--experimental-wasm-threads"
+```
+
+I need to make sure to export more memory for EMCC so that ^ runs.
+
+Node hangs and doesn't exit but other than that it seems to work.
+
+Link to known problem like this
+"https://www.gitmemory.com/issue/emscripten-core/emscripten/12801/729775098"
+
+
+
+--------
+Things needed to get EMCC pthreads in the browser (specifically mozilla) and no warning Chrome
+
+set two http headers in python
+
+Cross-Origin-Embedder-Policy: require-corp
+Cross-Origin-Opener-Policy: same-origin
+https://web.dev/coop-coep/
+
+
+this is done in 
+
+"serverThreads.py"
+
+in this directory
+
+
