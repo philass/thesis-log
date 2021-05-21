@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+ <head>
+  <title>Worker example: 4-core computation</title>
+ </head>
+ <body>
+  <p>The partial result: <output id="result"></output></p>
+  <p>The amount complete: <output id="percent">0</output> percent</p>
+  <script>
+  var num_workers = 4;
+  var result = 0;
+  var counter = 0;
+  workers = [];
+  for (var i = 0; i < num_workers; i++) {
+    workers.push(new Worker('worker.js'));
+  }
+  for (var i = 0; i < num_workers; i++) {
+       workers[i].onmessage = function (event) {
+       counter += 1;
+       result += event.data;
+       document.getElementById('percent').textContent = counter / num_workers * 100;
+       document.getElementById('result').textContent = result;
+    }
+  }
+  for (var i = 0; i < num_workers; i++) {
+    workers[i].postMessage(i);
+  }
+   
+  </script>
+ </body>
+</html>

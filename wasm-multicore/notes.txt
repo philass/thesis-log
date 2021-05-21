@@ -1,0 +1,13 @@
+integrate.c running in chrome notes...
+
+
+compile integrate.c with emcc
+`
+emcc -pthread -s USE_PTHREADS=1 -s PTHREAD_POOL_SIZE=4 -s EXIT_RUNTIME=1 integrate.c -o hello.html
+`
+
+Launch serverThreads.py
+
+open hello.html on localhost:8000/hello.html
+
+
