@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+ <head>
+  <title>Worker example: 4-core computation</title>
+ </head>
+ <body>
+  <p>The partial result: <output id="result"></output></p>
+  <p>The amount complete: <output id="percent">0</output> percent</p>
+  <script>
+  var num_workers = 4;
+  var buffer = new SharedArrayBuffer(num_workers * 4);
+  var arr = new Float32Array(buffer);
+  arr[0] = 0;
+  arr[1] = 0;
+  arr[2] = 0;
+  arr[3] = 0;
+  console.log(arr[0]);
+  var counter = 0;
+  workers = [];
+  for (var i = 0; i < num_workers; i++) {
+    workers.push(new Worker('worker.js'));
+  }
+  for (var i = 0; i < num_workers; i++) {
+       workers[i].onmessage = function (event) {
+         counter += 1;
+         var result = 0;
+         for (var i = 0; i < num_workers; i++) {
+            result += arr[i];
+         }
+         document.getElementById('percent').textContent = counter / num_workers * 100;
+         document.getElementById('result').textContent = result;
+    }
+  }
+  for (var i = 0; i < num_workers; i++) {
+    workers[i].postMessage({index : i, shared_buffer: buffer});
+  }
+   
+  </script>
+ </body>
+</html>
